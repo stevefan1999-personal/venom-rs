@@ -6,9 +6,9 @@ use crate::pe::{dbj2_hash, get_exports_by_name};
 mod pe;
 
 /// Shellcode Reflective DLL Injection (sRDI)
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
-struct Args {
+pub struct Args {
     /// The reflective loader DLL path (loader.dll)
     #[arg(long)]
     loader: String,
@@ -40,36 +40,37 @@ const LOADER_ENTRY_NAME: &str = "loader";
 // This will need to change if you modify the Bootstrap shellcode
 const BOOTSTRAP_TOTAL_LENGTH: u32 = 79;
 
-fn main() {
-    let args = Args::parse();
+pub fn run(
+    Args {
+        loader,
+        payload,
+        function,
+        parameter,
+        output,
+        flags,
+        ..
+    }: Args,
+) {
+    println!("Loader Path: {}", loader);
+    println!("Payload Path: {}", payload);
+    println!("Output Path: {}", output);
 
-    let loader_path = args.loader;
-    let payload_path = args.payload;
-    let function_name = args.function;
-    let parameter_value = args.parameter;
-    let output_path = args.output;
-    let flags_value = args.flags;
-
-    println!("Loader Path: {}", loader_path);
-    println!("Payload Path: {}", payload_path);
-    println!("Output Path: {}", output_path);
-
-    let mut loader_bytes = std::fs::read(loader_path).expect("Failed to read loader path");
-    let mut payload_bytes = std::fs::read(payload_path).expect("Failed to read payload path");
-    let function_hash = dbj2_hash(function_name.as_bytes());
+    let mut loader_bytes = std::fs::read(loader).expect("Failed to read loader path");
+    let mut payload_bytes = std::fs::read(payload).expect("Failed to read payload path");
+    let function_hash = dbj2_hash(function.as_bytes());
 
     let final_shellcode = convert_to_shellcode(
         &mut loader_bytes,
         &mut payload_bytes,
         function_hash,
-        parameter_value,
-        flags_value,
+        parameter,
+        flags,
     );
 
-    fs::write(output_path, final_shellcode).expect("Failed to write the final shellcode to file");
+    fs::write(output, final_shellcode).expect("Failed to write the final shellcode to file");
 }
 
-fn convert_to_shellcode(
+pub fn convert_to_shellcode(
     loader_bytes: &mut Vec<u8>,
     payload_bytes: &mut Vec<u8>,
     function_hash: u32,

