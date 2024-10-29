@@ -2,19 +2,20 @@
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
 
-use core::{ffi::c_void, slice::from_raw_parts, arch::asm};
+use core::{arch::asm, ffi::c_void, slice::from_raw_parts};
 use std::{collections::BTreeMap, ffi::CStr};
-use windows_sys::{
-    Win32::{
-        Foundation::{HANDLE, UNICODE_STRING, BOOLEAN},
-        System::{
-            Diagnostics::{Debug::{
-                IMAGE_NT_HEADERS64, IMAGE_SECTION_HEADER, IMAGE_DIRECTORY_ENTRY_EXPORT,
-            }},
-            SystemServices::{
-                IMAGE_DOS_HEADER, IMAGE_DOS_SIGNATURE, IMAGE_EXPORT_DIRECTORY, IMAGE_NT_SIGNATURE,
-            }, WindowsProgramming::{CLIENT_ID}, Kernel::{LIST_ENTRY, NT_TIB}, Threading::PEB,
+use windows_sys::Win32::{
+    Foundation::{BOOLEAN, HANDLE, UNICODE_STRING},
+    System::{
+        Diagnostics::Debug::{
+            IMAGE_DIRECTORY_ENTRY_EXPORT, IMAGE_NT_HEADERS64, IMAGE_SECTION_HEADER,
         },
+        Kernel::{LIST_ENTRY, NT_TIB},
+        SystemServices::{
+            IMAGE_DOS_HEADER, IMAGE_DOS_SIGNATURE, IMAGE_EXPORT_DIRECTORY, IMAGE_NT_SIGNATURE,
+        },
+        Threading::PEB,
+        WindowsProgramming::CLIENT_ID,
     },
 };
 
@@ -39,7 +40,8 @@ pub unsafe fn get_module_exports(module_base: *mut u8) -> BTreeMap<String, usize
         panic!("[-] Failed to get DOS header");
     }
 
-    let nt_header = (module_base as usize + (*dos_header).e_lfanew as usize) as *mut IMAGE_NT_HEADERS64;
+    let nt_header =
+        (module_base as usize + (*dos_header).e_lfanew as usize) as *mut IMAGE_NT_HEADERS64;
 
     let export_directory = rva_to_file_offset_pointer(
         module_base as usize,
@@ -83,8 +85,9 @@ pub unsafe fn get_module_exports(module_base: *mut u8) -> BTreeMap<String, usize
 
 pub unsafe fn rva_to_file_offset_pointer(module_base: usize, mut rva: u32) -> usize {
     let dos_header = module_base as *mut IMAGE_DOS_HEADER;
-    
-    let nt_headers = (module_base as usize + (*dos_header).e_lfanew as usize) as *mut IMAGE_NT_HEADERS64;
+
+    let nt_headers =
+        (module_base as usize + (*dos_header).e_lfanew as usize) as *mut IMAGE_NT_HEADERS64;
 
     let ref_nt_headers = &*nt_headers;
 
@@ -109,35 +112,31 @@ pub unsafe fn rva_to_file_offset_pointer(module_base: usize, mut rva: u32) -> us
 }
 
 /// Get a pointer to the Thread Environment Block (TEB)
-pub unsafe fn get_teb() -> *mut TEB 
-{
+pub unsafe fn get_teb() -> *mut TEB {
     let teb: *mut TEB;
     asm!("mov {teb}, gs:[0x30]", teb = out(reg) teb);
     teb
 }
 
 /// Get a pointer to the Process Environment Block (PEB)
-pub unsafe fn get_peb() -> *mut PEB 
-{
+pub unsafe fn get_peb() -> *mut PEB {
     let teb = get_teb();
     let peb = (*teb).ProcessEnvironmentBlock;
     peb
 }
 
-pub unsafe fn get_loaded_module_by_name(module_name: &[u8]) -> Option<*mut u8> 
-{
+pub unsafe fn get_loaded_module_by_name(module_name: &[u8]) -> Option<*mut u8> {
     let peb = get_peb();
     let peb_ldr_data_ptr = (*peb).Ldr as *mut PEB_LDR_DATA;
-    let mut module_list = (*peb_ldr_data_ptr).InLoadOrderModuleList.Flink as *mut LDR_DATA_TABLE_ENTRY;
+    let mut module_list =
+        (*peb_ldr_data_ptr).InLoadOrderModuleList.Flink as *mut LDR_DATA_TABLE_ENTRY;
 
-    while !(*module_list).DllBase.is_null() 
-    {
+    while !(*module_list).DllBase.is_null() {
         let dll_buffer_ptr = (*module_list).BaseDllName.Buffer;
         let dll_length = (*module_list).BaseDllName.Length as usize;
         let dll_name_slice = from_raw_parts(dll_buffer_ptr as *const u8, dll_length);
 
-        if module_name == dll_name_slice
-        {
+        if module_name == dll_name_slice {
             return Some((*module_list).DllBase as _);
         }
 
@@ -147,10 +146,14 @@ pub unsafe fn get_loaded_module_by_name(module_name: &[u8]) -> Option<*mut u8>
     return None;
 }
 
-pub unsafe fn get_section_header_by_hash(module_base: *mut u8, section_hash: u32) -> Option<*mut IMAGE_SECTION_HEADER> {
+pub unsafe fn get_section_header_by_hash(
+    module_base: *mut u8,
+    section_hash: u32,
+) -> Option<*mut IMAGE_SECTION_HEADER> {
     let dos_header = module_base as *mut IMAGE_DOS_HEADER;
-    
-    let nt_headers = (module_base as usize + (*dos_header).e_lfanew as usize) as *mut IMAGE_NT_HEADERS64;
+
+    let nt_headers =
+        (module_base as usize + (*dos_header).e_lfanew as usize) as *mut IMAGE_NT_HEADERS64;
 
     let section_header = (&(*nt_headers).OptionalHeader as *const _ as usize
         + (*nt_headers).FileHeader.SizeOfOptionalHeader as usize)
@@ -169,12 +172,10 @@ pub unsafe fn get_section_header_by_hash(module_base: *mut u8, section_hash: u32
 }
 
 /// Get a pointer to IMAGE_DOS_HEADER
-pub unsafe fn get_dos_header(module_base: *mut u8) -> Option<*mut IMAGE_DOS_HEADER> 
-{
+pub unsafe fn get_dos_header(module_base: *mut u8) -> Option<*mut IMAGE_DOS_HEADER> {
     let dos_header = module_base as *mut IMAGE_DOS_HEADER;
 
-    if (*dos_header).e_magic != IMAGE_DOS_SIGNATURE 
-    {
+    if (*dos_header).e_magic != IMAGE_DOS_SIGNATURE {
         return None;
     }
 
@@ -182,38 +183,33 @@ pub unsafe fn get_dos_header(module_base: *mut u8) -> Option<*mut IMAGE_DOS_HEAD
 }
 
 /// Get a pointer to IMAGE_NT_HEADERS64 x86_64
-pub unsafe fn get_nt_headers(module_base: *mut u8) -> Option<*mut IMAGE_NT_HEADERS64> 
-{
+pub unsafe fn get_nt_headers(module_base: *mut u8) -> Option<*mut IMAGE_NT_HEADERS64> {
     let dos_header = get_dos_header(module_base)?;
 
-    let nt_headers = (module_base as usize + (*dos_header).e_lfanew as usize) as *mut IMAGE_NT_HEADERS64;
+    let nt_headers =
+        (module_base as usize + (*dos_header).e_lfanew as usize) as *mut IMAGE_NT_HEADERS64;
 
-    if (*nt_headers).Signature != IMAGE_NT_SIGNATURE as _ 
-    {
+    if (*nt_headers).Signature != IMAGE_NT_SIGNATURE as _ {
         return None;
     }
 
     return Some(nt_headers);
 }
 
-pub fn dbj2_hash(buffer: &[u8]) -> u32 
-{
+pub fn dbj2_hash(buffer: &[u8]) -> u32 {
     let mut hash: u32 = 5381;
     let mut i: usize = 0;
     let mut char: u8;
 
-    while i < buffer.len() 
-    {
+    while i < buffer.len() {
         char = buffer[i];
-        
-        if char == 0 
-        {
+
+        if char == 0 {
             i += 1;
             continue;
         }
-        
-        if char >= ('a' as u8) 
-        {
+
+        if char >= ('a' as u8) {
             char -= 0x20;
         }
 
@@ -231,11 +227,12 @@ pub union LDR_DATA_TABLE_ENTRY_u1 {
     pub InProgressLinks: LIST_ENTRY,
 }
 
-pub type PLDR_INIT_ROUTINE = Option<unsafe extern "system" fn(DllHandle: *mut c_void, Reason: u32, Context: *mut c_void) -> BOOLEAN>;
+pub type PLDR_INIT_ROUTINE = Option<
+    unsafe extern "system" fn(DllHandle: *mut c_void, Reason: u32, Context: *mut c_void) -> BOOLEAN,
+>;
 
 #[repr(C)]
-pub struct LDR_DATA_TABLE_ENTRY 
-{
+pub struct LDR_DATA_TABLE_ENTRY {
     pub InLoadOrderLinks: LIST_ENTRY,
     pub InMemoryOrderLinks: LIST_ENTRY,
     pub u1: LDR_DATA_TABLE_ENTRY_u1,
@@ -247,8 +244,7 @@ pub struct LDR_DATA_TABLE_ENTRY
 }
 
 #[repr(C)]
-pub struct TEB 
-{
+pub struct TEB {
     pub NtTib: NT_TIB,
     pub EnvironmentPointer: *mut c_void,
     pub ClientId: CLIENT_ID,

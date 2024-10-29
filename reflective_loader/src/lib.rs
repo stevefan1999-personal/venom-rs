@@ -3,25 +3,37 @@
 #![allow(non_snake_case)]
 #![allow(non_camel_case_types)]
 
-use core::{ffi::c_void, ptr::null_mut, slice::from_raw_parts, mem::{transmute, size_of}, arch::asm};
+use core::{
+    arch::asm,
+    ffi::c_void,
+    mem::{size_of, transmute},
+    ptr::null_mut,
+    slice::from_raw_parts,
+};
 use windows_sys::{
     core::PCSTR,
     Win32::{
-        Foundation::{BOOL, FARPROC, HANDLE, UNICODE_STRING, HMODULE, BOOLEAN},
+        Foundation::{BOOL, BOOLEAN, FARPROC, HANDLE, HMODULE, UNICODE_STRING},
         System::{
-            Diagnostics::{Debug::{
-                IMAGE_NT_HEADERS64, IMAGE_SCN_MEM_EXECUTE,
-                IMAGE_SCN_MEM_READ, IMAGE_SCN_MEM_WRITE, IMAGE_SECTION_HEADER, IMAGE_DIRECTORY_ENTRY_EXPORT, IMAGE_DIRECTORY_ENTRY_BASERELOC, IMAGE_DIRECTORY_ENTRY_IMPORT,
-            }},
+            Diagnostics::Debug::{
+                IMAGE_DIRECTORY_ENTRY_BASERELOC, IMAGE_DIRECTORY_ENTRY_EXPORT,
+                IMAGE_DIRECTORY_ENTRY_IMPORT, IMAGE_NT_HEADERS64, IMAGE_SCN_MEM_EXECUTE,
+                IMAGE_SCN_MEM_READ, IMAGE_SCN_MEM_WRITE, IMAGE_SECTION_HEADER,
+            },
+            Kernel::{LIST_ENTRY, NT_TIB},
             Memory::{
-                MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE, PAGE_EXECUTE_READ,
-                PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY, PAGE_PROTECTION_FLAGS,
-                PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY, VIRTUAL_ALLOCATION_TYPE,
-                VIRTUAL_FREE_TYPE,
+                MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE,
+                PAGE_EXECUTE_WRITECOPY, PAGE_PROTECTION_FLAGS, PAGE_READONLY, PAGE_READWRITE,
+                PAGE_WRITECOPY, VIRTUAL_ALLOCATION_TYPE, VIRTUAL_FREE_TYPE,
             },
             SystemServices::{
-                DLL_PROCESS_ATTACH, IMAGE_DOS_HEADER, IMAGE_DOS_SIGNATURE, IMAGE_NT_SIGNATURE, IMAGE_EXPORT_DIRECTORY, IMAGE_BASE_RELOCATION, IMAGE_REL_BASED_HIGHLOW, IMAGE_REL_BASED_DIR64, IMAGE_IMPORT_DESCRIPTOR, IMAGE_ORDINAL_FLAG64, IMAGE_IMPORT_BY_NAME,
-            }, WindowsProgramming::{IMAGE_THUNK_DATA64, CLIENT_ID}, Kernel::{LIST_ENTRY, NT_TIB}, Threading::PEB,
+                DLL_PROCESS_ATTACH, IMAGE_BASE_RELOCATION, IMAGE_DOS_HEADER, IMAGE_DOS_SIGNATURE,
+                IMAGE_EXPORT_DIRECTORY, IMAGE_IMPORT_BY_NAME, IMAGE_IMPORT_DESCRIPTOR,
+                IMAGE_NT_SIGNATURE, IMAGE_ORDINAL_FLAG64, IMAGE_REL_BASED_DIR64,
+                IMAGE_REL_BASED_HIGHLOW,
+            },
+            Threading::PEB,
+            WindowsProgramming::{CLIENT_ID, IMAGE_THUNK_DATA64},
         },
     },
 };
@@ -32,7 +44,9 @@ static _FLTUSED: i32 = 0;
 
 #[cfg(not(test))]
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! { loop {} }
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    loop {}
+}
 
 // Using no_std appears to expect _DllMainCRTStartup and _fltused instead of only DllMain
 #[no_mangle]
@@ -48,17 +62,23 @@ pub unsafe extern "system" fn _DllMainCRTStartup(
 /// Performs a Reflective DLL Injection
 #[link_section = ".text"]
 #[no_mangle]
-pub unsafe extern "system" fn loader(payload_dll: *mut c_void, function_hash: u32, user_data: *mut c_void, user_data_len: u32, _shellcode_bin: *mut c_void, _flags: u32)
-{
+pub unsafe extern "system" fn loader(
+    payload_dll: *mut c_void,
+    function_hash: u32,
+    user_data: *mut c_void,
+    user_data_len: u32,
+    _shellcode_bin: *mut c_void,
+    _flags: u32,
+) {
     let module_base = payload_dll as *mut u8;
 
-    if module_base.is_null()
-    {
+    if module_base.is_null() {
         return;
     }
 
     let dos_header = module_base as *mut IMAGE_DOS_HEADER;
-    let nt_headers = (module_base as usize + (*dos_header).e_lfanew as usize) as *mut IMAGE_NT_HEADERS64;
+    let nt_headers =
+        (module_base as usize + (*dos_header).e_lfanew as usize) as *mut IMAGE_NT_HEADERS64;
 
     //
     // Step 1) Load required modules and exports by hash
@@ -78,8 +98,7 @@ pub unsafe extern "system" fn loader(payload_dll: *mut c_void, function_hash: u3
     let kernel32_base = get_loaded_module_by_hash(KERNEL32_HASH).unwrap();
     let ntdll_base = get_loaded_module_by_hash(NTDLL_HASH).unwrap();
 
-    if kernel32_base.is_null() || ntdll_base.is_null() 
-    {
+    if kernel32_base.is_null() || ntdll_base.is_null() {
         return;
     }
 
@@ -88,19 +107,38 @@ pub unsafe extern "system" fn loader(payload_dll: *mut c_void, function_hash: u3
     type fnLoadLibraryA = unsafe extern "system" fn(lplibfilename: PCSTR) -> HMODULE;
 
     #[allow(non_camel_case_types)]
-    type fnGetProcAddress = unsafe extern "system" fn(HMODULE: HMODULE, lpprocname: PCSTR) -> FARPROC;
+    type fnGetProcAddress =
+        unsafe extern "system" fn(HMODULE: HMODULE, lpprocname: PCSTR) -> FARPROC;
 
     #[allow(non_camel_case_types)]
-    type fnFlushInstructionCache = unsafe extern "system" fn(hprocess: HANDLE, lpbaseaddress: *const c_void, dwsize: usize) -> BOOL;
+    type fnFlushInstructionCache = unsafe extern "system" fn(
+        hprocess: HANDLE,
+        lpbaseaddress: *const c_void,
+        dwsize: usize,
+    ) -> BOOL;
 
     #[allow(non_camel_case_types)]
-    type fnVirtualAlloc = unsafe extern "system" fn(lpaddress: *const c_void, dwsize: usize, flallocationtype: VIRTUAL_ALLOCATION_TYPE, flprotect: PAGE_PROTECTION_FLAGS) -> *mut c_void;
+    type fnVirtualAlloc = unsafe extern "system" fn(
+        lpaddress: *const c_void,
+        dwsize: usize,
+        flallocationtype: VIRTUAL_ALLOCATION_TYPE,
+        flprotect: PAGE_PROTECTION_FLAGS,
+    ) -> *mut c_void;
 
     #[allow(non_camel_case_types)]
-    type fnVirtualProtect = unsafe extern "system" fn(lpaddress: *const c_void, dwsize: usize, flnewprotect: PAGE_PROTECTION_FLAGS, lpfloldprotect: *mut PAGE_PROTECTION_FLAGS) -> BOOL;
+    type fnVirtualProtect = unsafe extern "system" fn(
+        lpaddress: *const c_void,
+        dwsize: usize,
+        flnewprotect: PAGE_PROTECTION_FLAGS,
+        lpfloldprotect: *mut PAGE_PROTECTION_FLAGS,
+    ) -> BOOL;
 
     #[allow(non_camel_case_types)]
-    type fnVirtualFree = unsafe extern "system" fn(lpaddress: *mut c_void, dwsize: usize, dwfreetype: VIRTUAL_FREE_TYPE) -> BOOL;
+    type fnVirtualFree = unsafe extern "system" fn(
+        lpaddress: *mut c_void,
+        dwsize: usize,
+        dwfreetype: VIRTUAL_FREE_TYPE,
+    ) -> BOOL;
 
     #[allow(non_camel_case_types)]
     type fnExitThread = unsafe extern "system" fn(dwexitcode: u32) -> !;
@@ -127,7 +165,13 @@ pub unsafe extern "system" fn loader(payload_dll: *mut c_void, function_hash: u3
     let exitthread_addy = get_export_by_hash(kernel32_base, EXIT_THREAD_HASH).unwrap();
     let _ExitThread = transmute::<_, fnExitThread>(exitthread_addy);
 
-    if loadlib_addy == 0 || getproc_addy == 0 || virtualalloc_addy == 0 || virtualprotect_addy == 0 || flushcache_addy == 0 || virtualfree_addy == 0 || exitthread_addy == 0
+    if loadlib_addy == 0
+        || getproc_addy == 0
+        || virtualalloc_addy == 0
+        || virtualprotect_addy == 0
+        || flushcache_addy == 0
+        || virtualfree_addy == 0
+        || exitthread_addy == 0
     {
         return;
     }
@@ -138,37 +182,52 @@ pub unsafe extern "system" fn loader(payload_dll: *mut c_void, function_hash: u3
 
     let image_size = (*nt_headers).OptionalHeader.SizeOfImage as usize;
     let preferred_image_base_rva = (*nt_headers).OptionalHeader.ImageBase as *mut c_void;
-    let mut new_module_base = VirtualAlloc(preferred_image_base_rva, image_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    let mut new_module_base = VirtualAlloc(
+        preferred_image_base_rva,
+        image_size,
+        MEM_RESERVE | MEM_COMMIT,
+        PAGE_READWRITE,
+    );
 
-    if new_module_base.is_null() 
-    {
-        new_module_base = VirtualAlloc(null_mut(), image_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if new_module_base.is_null() {
+        new_module_base = VirtualAlloc(
+            null_mut(),
+            image_size,
+            MEM_RESERVE | MEM_COMMIT,
+            PAGE_READWRITE,
+        );
     }
 
-    let section_header = (&(*nt_headers).OptionalHeader as *const _ as usize + (*nt_headers).FileHeader.SizeOfOptionalHeader as usize) as *mut IMAGE_SECTION_HEADER;
+    let section_header = (&(*nt_headers).OptionalHeader as *const _ as usize
+        + (*nt_headers).FileHeader.SizeOfOptionalHeader as usize)
+        as *mut IMAGE_SECTION_HEADER;
 
-    for i in 0..(*nt_headers).FileHeader.NumberOfSections 
-    {
+    for i in 0..(*nt_headers).FileHeader.NumberOfSections {
         let section_header_i = &*(section_header.add(i as usize));
-        let destination = new_module_base.cast::<u8>().add(section_header_i.VirtualAddress as usize);
-        let source = (module_base as usize + section_header_i.PointerToRawData as usize) as *const u8;
+        let destination = new_module_base
+            .cast::<u8>()
+            .add(section_header_i.VirtualAddress as usize);
+        let source =
+            (module_base as usize + section_header_i.PointerToRawData as usize) as *const u8;
         let size = section_header_i.SizeOfRawData as usize;
 
-        //core::ptr::copy_nonoverlapping(source, destination,size);
-        let source_data = core::slice::from_raw_parts(source as *const u8, size);
-        
-        for x in 0..size {
-            let src_data = source_data[x];
-            let dest_data = destination.add(x);
-            *dest_data = src_data;
-        }
+        core::ptr::copy_nonoverlapping(source, destination, size);
+        // let source_data = core::slice::from_raw_parts(source as *const u8, size);
+
+        // for x in 0..size {
+        //     let src_data = source_data[x];
+        //     let dest_data = destination.add(x);
+        //     *dest_data = src_data;
+        // }
     }
- 
+
     // Copy headers into the target memory location (remember to stomp/erase DOS and NT headers later)
     // get_export_by_hash will fail for new_module_base if we don't copy NT and DOS headers to newly allocated memory
-    for i in 0..(*nt_headers).OptionalHeader.SizeOfHeaders 
-    {
-        new_module_base.cast::<u8>().add(i as usize).write(module_base.add(i as usize).read());
+    for i in 0..(*nt_headers).OptionalHeader.SizeOfHeaders {
+        new_module_base
+            .cast::<u8>()
+            .add(i as usize)
+            .write(module_base.add(i as usize).read());
     }
 
     // Everything from here will use the new_module_base memory region that was just allocated via VirtualAlloc
@@ -179,88 +238,95 @@ pub unsafe extern "system" fn loader(payload_dll: *mut c_void, function_hash: u3
 
     let delta = new_module_base as isize - (*nt_headers).OptionalHeader.ImageBase as isize;
 
-    let mut base_relocation = (new_module_base as usize + (*nt_headers).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC as usize].VirtualAddress as usize) as *mut IMAGE_BASE_RELOCATION;
+    let mut base_relocation = (new_module_base as usize
+        + (*nt_headers).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC as usize]
+            .VirtualAddress as usize) as *mut IMAGE_BASE_RELOCATION;
 
-    if base_relocation.is_null() 
-    {
+    if base_relocation.is_null() {
         return;
     }
 
-    let base_relocation_end = base_relocation as usize + (*nt_headers).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC as usize].Size as usize;
+    let base_relocation_end = base_relocation as usize
+        + (*nt_headers).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC as usize].Size
+            as usize;
 
-    while (*base_relocation).VirtualAddress != 0u32 && (*base_relocation).VirtualAddress as usize <= base_relocation_end && (*base_relocation).SizeOfBlock != 0u32
+    while (*base_relocation).VirtualAddress != 0u32
+        && (*base_relocation).VirtualAddress as usize <= base_relocation_end
+        && (*base_relocation).SizeOfBlock != 0u32
     {
-        let address = (new_module_base as usize + (*base_relocation).VirtualAddress as usize) as isize;
+        let address =
+            (new_module_base as usize + (*base_relocation).VirtualAddress as usize) as isize;
         let item = (base_relocation as usize + size_of::<IMAGE_BASE_RELOCATION>()) as *const u16;
-        let count = ((*base_relocation).SizeOfBlock as usize - size_of::<IMAGE_BASE_RELOCATION>()) / size_of::<u16>() as usize;
+        let count = ((*base_relocation).SizeOfBlock as usize - size_of::<IMAGE_BASE_RELOCATION>())
+            / size_of::<u16>() as usize;
 
-        for i in 0..count 
-        {
+        for i in 0..count {
             let type_field = (item.offset(i as isize).read() >> 12) as u32;
             let offset = item.offset(i as isize).read() & 0xFFF;
 
-            if type_field == IMAGE_REL_BASED_DIR64 || type_field == IMAGE_REL_BASED_HIGHLOW 
-            {
+            if type_field == IMAGE_REL_BASED_DIR64 || type_field == IMAGE_REL_BASED_HIGHLOW {
                 // Add the delta to the value of each address where the relocation needs to be performed
                 *((address + offset as isize) as *mut isize) += delta;
             }
         }
 
-        base_relocation = (base_relocation as usize + (*base_relocation).SizeOfBlock as usize) as *mut IMAGE_BASE_RELOCATION;
+        base_relocation = (base_relocation as usize + (*base_relocation).SizeOfBlock as usize)
+            as *mut IMAGE_BASE_RELOCATION;
     }
 
     //
     // Step 4) Process image import table (resolve imports)
     //
 
-    let mut import_directory = (new_module_base as usize + (*nt_headers).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT as usize].VirtualAddress as usize) as *mut IMAGE_IMPORT_DESCRIPTOR;
+    let mut import_directory = (new_module_base as usize
+        + (*nt_headers).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT as usize]
+            .VirtualAddress as usize)
+        as *mut IMAGE_IMPORT_DESCRIPTOR;
 
-    if import_directory.is_null()
-    {
+    if import_directory.is_null() {
         return;
     }
 
-    while (*import_directory).Name != 0x0 
-    {
+    while (*import_directory).Name != 0x0 {
         let dll_name = (new_module_base as usize + (*import_directory).Name as usize) as *const i8;
 
-        if dll_name.is_null() 
-        {
+        if dll_name.is_null() {
             return;
         }
 
         let dll_handle = LoadLibraryA(dll_name as _);
 
-        if dll_handle == 0 
-        {
+        if dll_handle == 0 {
             return;
         }
 
-        let mut original_thunk = if (new_module_base as usize + (*import_directory).Anonymous.OriginalFirstThunk as usize) != 0
+        let mut original_thunk = if (new_module_base as usize
+            + (*import_directory).Anonymous.OriginalFirstThunk as usize)
+            != 0
         {
-            let orig_thunk = (new_module_base as usize + (*import_directory).Anonymous.OriginalFirstThunk as usize) as *mut IMAGE_THUNK_DATA64;
+            let orig_thunk = (new_module_base as usize
+                + (*import_directory).Anonymous.OriginalFirstThunk as usize)
+                as *mut IMAGE_THUNK_DATA64;
             orig_thunk
-        } 
-        else 
-        {
-            let thunk = (new_module_base as usize + (*import_directory).FirstThunk as usize) as *mut IMAGE_THUNK_DATA64;
+        } else {
+            let thunk = (new_module_base as usize + (*import_directory).FirstThunk as usize)
+                as *mut IMAGE_THUNK_DATA64;
             thunk
         };
 
-        let mut thunk = (new_module_base as usize + (*import_directory).FirstThunk as usize) as *mut IMAGE_THUNK_DATA64;
+        let mut thunk = (new_module_base as usize + (*import_directory).FirstThunk as usize)
+            as *mut IMAGE_THUNK_DATA64;
 
-        while (*original_thunk).u1.Function != 0 
-        {
+        while (*original_thunk).u1.Function != 0 {
             let snap_result = ((*original_thunk).u1.Ordinal) & IMAGE_ORDINAL_FLAG64 != 0;
 
-            if snap_result 
-            {
+            if snap_result {
                 let fn_ordinal = ((*original_thunk).u1.Ordinal & 0xffff) as *const u8;
                 (*thunk).u1.Function = GetProcAddress(dll_handle, fn_ordinal).unwrap() as _;
-            } 
-            else 
-            {
-                let thunk_data = (new_module_base as usize + (*original_thunk).u1.AddressOfData as usize) as *mut IMAGE_IMPORT_BY_NAME;
+            } else {
+                let thunk_data = (new_module_base as usize
+                    + (*original_thunk).u1.AddressOfData as usize)
+                    as *mut IMAGE_IMPORT_BY_NAME;
                 let fn_name = (*thunk_data).Name.as_ptr();
                 (*thunk).u1.Function = GetProcAddress(dll_handle, fn_name).unwrap() as _;
             }
@@ -269,58 +335,64 @@ pub unsafe extern "system" fn loader(payload_dll: *mut c_void, function_hash: u3
             original_thunk = original_thunk.add(1);
         }
 
-        import_directory = (import_directory as usize + size_of::<IMAGE_IMPORT_DESCRIPTOR>() as usize) as _;
+        import_directory =
+            (import_directory as usize + size_of::<IMAGE_IMPORT_DESCRIPTOR>() as usize) as _;
     }
 
     //
     // Step 5) Set protection for each section
     //
 
-    let section_header = (&(*nt_headers).OptionalHeader as *const _ as usize + (*nt_headers).FileHeader.SizeOfOptionalHeader as usize) as *mut IMAGE_SECTION_HEADER;
+    let section_header = (&(*nt_headers).OptionalHeader as *const _ as usize
+        + (*nt_headers).FileHeader.SizeOfOptionalHeader as usize)
+        as *mut IMAGE_SECTION_HEADER;
 
-    for i in 0..(*nt_headers).FileHeader.NumberOfSections 
-    {
+    for i in 0..(*nt_headers).FileHeader.NumberOfSections {
         let mut _protection = 0;
         let mut _old_protection = 0;
 
         // get a reference to the current _IMAGE_SECTION_HEADER
         let section_header_i = unsafe { &*(section_header.add(i as usize)) };
         // get the pointer to current section header's virtual address
-        let destination = new_module_base.cast::<u8>().add(section_header_i.VirtualAddress as usize);
+        let destination = new_module_base
+            .cast::<u8>()
+            .add(section_header_i.VirtualAddress as usize);
         // get the size of the current section header's data
         let size = section_header_i.SizeOfRawData as usize;
 
-        if section_header_i.Characteristics & IMAGE_SCN_MEM_WRITE != 0 
-        {
+        if section_header_i.Characteristics & IMAGE_SCN_MEM_WRITE != 0 {
             _protection = PAGE_WRITECOPY;
         }
 
-        if section_header_i.Characteristics & IMAGE_SCN_MEM_READ != 0 
-        {
+        if section_header_i.Characteristics & IMAGE_SCN_MEM_READ != 0 {
             _protection = PAGE_READONLY;
         }
 
-        if section_header_i.Characteristics & IMAGE_SCN_MEM_WRITE != 0 && section_header_i.Characteristics & IMAGE_SCN_MEM_READ != 0
+        if section_header_i.Characteristics & IMAGE_SCN_MEM_WRITE != 0
+            && section_header_i.Characteristics & IMAGE_SCN_MEM_READ != 0
         {
             _protection = PAGE_READWRITE;
         }
 
-        if section_header_i.Characteristics & IMAGE_SCN_MEM_EXECUTE != 0 
-        {
+        if section_header_i.Characteristics & IMAGE_SCN_MEM_EXECUTE != 0 {
             _protection = PAGE_EXECUTE;
         }
 
-        if section_header_i.Characteristics & IMAGE_SCN_MEM_EXECUTE != 0 && section_header_i.Characteristics & IMAGE_SCN_MEM_WRITE != 0
+        if section_header_i.Characteristics & IMAGE_SCN_MEM_EXECUTE != 0
+            && section_header_i.Characteristics & IMAGE_SCN_MEM_WRITE != 0
         {
             _protection = PAGE_EXECUTE_WRITECOPY;
         }
 
-        if section_header_i.Characteristics & IMAGE_SCN_MEM_EXECUTE != 0 && section_header_i.Characteristics & IMAGE_SCN_MEM_READ != 0
+        if section_header_i.Characteristics & IMAGE_SCN_MEM_EXECUTE != 0
+            && section_header_i.Characteristics & IMAGE_SCN_MEM_READ != 0
         {
             _protection = PAGE_EXECUTE_READ;
         }
 
-        if section_header_i.Characteristics & IMAGE_SCN_MEM_EXECUTE != 0 && section_header_i.Characteristics & IMAGE_SCN_MEM_WRITE != 0 && section_header_i.Characteristics & IMAGE_SCN_MEM_READ != 0
+        if section_header_i.Characteristics & IMAGE_SCN_MEM_EXECUTE != 0
+            && section_header_i.Characteristics & IMAGE_SCN_MEM_WRITE != 0
+            && section_header_i.Characteristics & IMAGE_SCN_MEM_READ != 0
         {
             _protection = PAGE_EXECUTE_READWRITE;
         }
@@ -335,10 +407,12 @@ pub unsafe extern "system" fn loader(payload_dll: *mut c_void, function_hash: u3
     //
     // Step 6) Execute DllMain or user function depending on the flag
     //
-    let entry_point = new_module_base as usize + (*nt_headers).OptionalHeader.AddressOfEntryPoint as usize;    
+    let entry_point =
+        new_module_base as usize + (*nt_headers).OptionalHeader.AddressOfEntryPoint as usize;
 
     #[allow(non_camel_case_types)]
-    type fnDllMain = unsafe extern "system" fn(module: HMODULE, call_reason: u32, reserved: *mut c_void) -> BOOL;
+    type fnDllMain =
+        unsafe extern "system" fn(module: HMODULE, call_reason: u32, reserved: *mut c_void) -> BOOL;
 
     #[allow(non_snake_case)]
     let DllMain = transmute::<_, fnDllMain>(entry_point);
@@ -348,10 +422,12 @@ pub unsafe extern "system" fn loader(payload_dll: *mut c_void, function_hash: u3
         DllMain(new_module_base as _, DLL_PROCESS_ATTACH, module_base as _);
     } else {
         #[allow(non_camel_case_types)]
-        type fnUserFunction = unsafe extern "system" fn(user_data: *mut c_void, user_data_length: u32) -> BOOL;
+        type fnUserFunction =
+            unsafe extern "system" fn(user_data: *mut c_void, user_data_length: u32) -> BOOL;
 
         // We need to use the old module base from payload.dll to find the address of the hash because new one does not have NT or DOS headers
-        let user_function_address = get_export_by_hash(new_module_base as _, function_hash).unwrap();
+        let user_function_address =
+            get_export_by_hash(new_module_base as _, function_hash).unwrap();
 
         #[allow(non_snake_case)]
         let UserFunction = transmute::<_, fnUserFunction>(user_function_address);
@@ -363,19 +439,17 @@ pub unsafe extern "system" fn loader(payload_dll: *mut c_void, function_hash: u3
 
 #[link_section = ".text"]
 /// Gets a pointer to IMAGE_NT_HEADERS64 x86_64
-pub unsafe fn get_nt_headers(module_base: *mut u8) -> Option<*mut IMAGE_NT_HEADERS64> 
-{
+pub unsafe fn get_nt_headers(module_base: *mut u8) -> Option<*mut IMAGE_NT_HEADERS64> {
     let dos_header = module_base as *mut IMAGE_DOS_HEADER;
 
-    if (*dos_header).e_magic != IMAGE_DOS_SIGNATURE 
-    {
+    if (*dos_header).e_magic != IMAGE_DOS_SIGNATURE {
         return None;
     }
 
-    let nt_headers = (module_base as usize + (*dos_header).e_lfanew as usize) as *mut IMAGE_NT_HEADERS64;
+    let nt_headers =
+        (module_base as usize + (*dos_header).e_lfanew as usize) as *mut IMAGE_NT_HEADERS64;
 
-    if (*nt_headers).Signature != IMAGE_NT_SIGNATURE as _ 
-    {
+    if (*nt_headers).Signature != IMAGE_NT_SIGNATURE as _ {
         return None;
     }
 
@@ -384,8 +458,7 @@ pub unsafe fn get_nt_headers(module_base: *mut u8) -> Option<*mut IMAGE_NT_HEADE
 
 #[link_section = ".text"]
 /// Get a pointer to the Thread Environment Block (TEB)
-pub unsafe fn get_teb() -> *mut TEB 
-{
+pub unsafe fn get_teb() -> *mut TEB {
     let teb: *mut TEB;
     asm!("mov {teb}, gs:[0x30]", teb = out(reg) teb);
     teb
@@ -393,8 +466,7 @@ pub unsafe fn get_teb() -> *mut TEB
 
 #[link_section = ".text"]
 /// Get a pointer to the Process Environment Block (PEB)
-pub unsafe fn get_peb() -> *mut PEB 
-{
+pub unsafe fn get_peb() -> *mut PEB {
     let teb = get_teb();
     let peb = (*teb).ProcessEnvironmentBlock;
     peb
@@ -402,20 +474,18 @@ pub unsafe fn get_peb() -> *mut PEB
 
 #[link_section = ".text"]
 /// Get loaded module by hash
-pub unsafe fn get_loaded_module_by_hash(module_hash: u32) -> Option<*mut u8> 
-{
+pub unsafe fn get_loaded_module_by_hash(module_hash: u32) -> Option<*mut u8> {
     let peb = get_peb();
     let peb_ldr_data_ptr = (*peb).Ldr as *mut PEB_LDR_DATA;
-    let mut module_list = (*peb_ldr_data_ptr).InLoadOrderModuleList.Flink as *mut LDR_DATA_TABLE_ENTRY;
+    let mut module_list =
+        (*peb_ldr_data_ptr).InLoadOrderModuleList.Flink as *mut LDR_DATA_TABLE_ENTRY;
 
-    while !(*module_list).DllBase.is_null() 
-    {
+    while !(*module_list).DllBase.is_null() {
         let dll_buffer_ptr = (*module_list).BaseDllName.Buffer;
         let dll_length = (*module_list).BaseDllName.Length as usize;
         let dll_name_slice = from_raw_parts(dll_buffer_ptr as *const u8, dll_length);
 
-        if module_hash == dbj2_hash(dll_name_slice) 
-        {
+        if module_hash == dbj2_hash(dll_name_slice) {
             return Some((*module_list).DllBase as _);
         }
 
@@ -427,22 +497,30 @@ pub unsafe fn get_loaded_module_by_hash(module_hash: u32) -> Option<*mut u8>
 
 #[link_section = ".text"]
 /// Get the address of an export by hash
-pub unsafe fn get_export_by_hash(module_base: *mut u8, export_name_hash: u32) -> Option<usize>
-{
+pub unsafe fn get_export_by_hash(module_base: *mut u8, export_name_hash: u32) -> Option<usize> {
     let nt_headers = get_nt_headers(module_base)?;
-    let export_directory = (module_base as usize + (*nt_headers).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT as usize].VirtualAddress as usize) as *mut IMAGE_EXPORT_DIRECTORY;
-    let names = from_raw_parts((module_base as usize + (*export_directory).AddressOfNames as usize) as *const u32, (*export_directory).NumberOfNames as _);
-    let functions = from_raw_parts((module_base as usize + (*export_directory).AddressOfFunctions as usize) as *const u32, (*export_directory).NumberOfFunctions as _,);
-    let ordinals = from_raw_parts((module_base as usize + (*export_directory).AddressOfNameOrdinals as usize) as *const u16, (*export_directory).NumberOfNames as _);
+    let export_directory = (module_base as usize
+        + (*nt_headers).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT as usize]
+            .VirtualAddress as usize) as *mut IMAGE_EXPORT_DIRECTORY;
+    let names = from_raw_parts(
+        (module_base as usize + (*export_directory).AddressOfNames as usize) as *const u32,
+        (*export_directory).NumberOfNames as _,
+    );
+    let functions = from_raw_parts(
+        (module_base as usize + (*export_directory).AddressOfFunctions as usize) as *const u32,
+        (*export_directory).NumberOfFunctions as _,
+    );
+    let ordinals = from_raw_parts(
+        (module_base as usize + (*export_directory).AddressOfNameOrdinals as usize) as *const u16,
+        (*export_directory).NumberOfNames as _,
+    );
 
-    for i in 0..(*export_directory).NumberOfNames 
-    {
+    for i in 0..(*export_directory).NumberOfNames {
         let name_addr = (module_base as usize + names[i as usize] as usize) as *const i8;
         let name_len = get_cstr_len(name_addr as _);
         let name_slice: &[u8] = from_raw_parts(name_addr as _, name_len);
 
-        if export_name_hash == dbj2_hash(name_slice) 
-        {
+        if export_name_hash == dbj2_hash(name_slice) {
             let ordinal = ordinals[i as usize] as usize;
             return Some(module_base as usize + functions[ordinal] as usize);
         }
@@ -453,24 +531,20 @@ pub unsafe fn get_export_by_hash(module_base: *mut u8, export_name_hash: u32) ->
 
 #[link_section = ".text"]
 /// Generate a unique hash
-pub fn dbj2_hash(buffer: &[u8]) -> u32 
-{
+pub fn dbj2_hash(buffer: &[u8]) -> u32 {
     let mut hsh: u32 = 5381;
     let mut iter: usize = 0;
     let mut cur: u8;
 
-    while iter < buffer.len() 
-    {
+    while iter < buffer.len() {
         cur = buffer[iter];
 
-        if cur == 0 
-        {
+        if cur == 0 {
             iter += 1;
             continue;
         }
 
-        if cur >= ('a' as u8) 
-        {
+        if cur >= ('a' as u8) {
             cur -= 0x20;
         }
 
@@ -483,12 +557,10 @@ pub fn dbj2_hash(buffer: &[u8]) -> u32
 
 #[link_section = ".text"]
 /// Get the length of a C String
-pub unsafe fn get_cstr_len(pointer: *const char) -> usize 
-{
+pub unsafe fn get_cstr_len(pointer: *const char) -> usize {
     let mut tmp: u64 = pointer as u64;
 
-    while *(tmp as *const u8) != 0 
-    {
+    while *(tmp as *const u8) != 0 {
         tmp += 1;
     }
 
@@ -498,11 +570,9 @@ pub unsafe fn get_cstr_len(pointer: *const char) -> usize
 #[link_section = ".text"]
 #[allow(dead_code)]
 /// Checks to see if the architecture x86 or x86_64
-pub fn is_wow64() -> bool 
-{
+pub fn is_wow64() -> bool {
     // A usize is 4 bytes on 32 bit and 8 bytes on 64 bit
-    if size_of::<usize>() == 4 
-    {
+    if size_of::<usize>() == 4 {
         return false;
     }
 
@@ -511,8 +581,7 @@ pub fn is_wow64() -> bool
 
 #[link_section = ".text"]
 /// Read memory from a location specified by an offset relative to the beginning of the GS segment.
-pub unsafe fn __readgsqword(offset: u64) -> u64 
-{
+pub unsafe fn __readgsqword(offset: u64) -> u64 {
     let output: u64;
     asm!("mov {}, gs:[{}]", out(reg) output, in(reg) offset);
     output
@@ -525,11 +594,12 @@ pub union LDR_DATA_TABLE_ENTRY_u1 {
     pub InProgressLinks: LIST_ENTRY,
 }
 
-pub type PLDR_INIT_ROUTINE = Option<unsafe extern "system" fn(DllHandle: *mut c_void, Reason: u32, Context: *mut c_void) -> BOOLEAN>;
+pub type PLDR_INIT_ROUTINE = Option<
+    unsafe extern "system" fn(DllHandle: *mut c_void, Reason: u32, Context: *mut c_void) -> BOOLEAN,
+>;
 
 #[repr(C)]
-pub struct LDR_DATA_TABLE_ENTRY 
-{
+pub struct LDR_DATA_TABLE_ENTRY {
     pub InLoadOrderLinks: LIST_ENTRY,
     pub InMemoryOrderLinks: LIST_ENTRY,
     pub u1: LDR_DATA_TABLE_ENTRY_u1,
@@ -541,8 +611,7 @@ pub struct LDR_DATA_TABLE_ENTRY
 }
 
 #[repr(C)]
-pub struct TEB 
-{
+pub struct TEB {
     pub NtTib: NT_TIB,
     pub EnvironmentPointer: *mut c_void,
     pub ClientId: CLIENT_ID,

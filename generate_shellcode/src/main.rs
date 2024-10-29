@@ -1,10 +1,8 @@
-use std::{
-    fs::{self},
-};
+use std::fs::{self};
 
-use clap::{Parser, arg, command};
+use clap::{arg, command, Parser};
 
-use crate::pe::{get_exports_by_name, dbj2_hash};
+use crate::pe::{dbj2_hash, get_exports_by_name};
 mod pe;
 
 /// Shellcode Reflective DLL Injection (sRDI)
@@ -31,9 +29,9 @@ struct Args {
     #[arg(long)]
     output: String,
 
-   /// The 0x0 flag will execute DllMain and any other flag will execute the function inside payload.dll (SayHello)
-   #[arg(long, default_value_t = 1)]
-   flags: u32,
+    /// The 0x0 flag will execute DllMain and any other flag will execute the function inside payload.dll (SayHello)
+    #[arg(long, default_value_t = 1)]
+    flags: u32,
 }
 
 // This will need to change if you change the name of the Reflective Loader function
@@ -56,20 +54,32 @@ fn main() {
     println!("Payload Path: {}", payload_path);
     println!("Output Path: {}", output_path);
 
-
     let mut loader_bytes = std::fs::read(loader_path).expect("Failed to read loader path");
     let mut payload_bytes = std::fs::read(payload_path).expect("Failed to read payload path");
     let function_hash = dbj2_hash(function_name.as_bytes());
 
-    let final_shellcode = convert_to_shellcode(&mut loader_bytes, &mut payload_bytes, function_hash, parameter_value, flags_value);
+    let final_shellcode = convert_to_shellcode(
+        &mut loader_bytes,
+        &mut payload_bytes,
+        function_hash,
+        parameter_value,
+        flags_value,
+    );
 
     fs::write(output_path, final_shellcode).expect("Failed to write the final shellcode to file");
 }
 
-fn convert_to_shellcode(loader_bytes: &mut Vec<u8>, payload_bytes: &mut Vec<u8>, function_hash: u32, parameter_value: String, flags_value: u32) -> Vec<u8> {
+fn convert_to_shellcode(
+    loader_bytes: &mut Vec<u8>,
+    payload_bytes: &mut Vec<u8>,
+    function_hash: u32,
+    parameter_value: String,
+    flags_value: u32,
+) -> Vec<u8> {
     // Get the reflective loader address in memory by name
-    let loader_address = get_exports_by_name(loader_bytes.as_mut_ptr(), LOADER_ENTRY_NAME.to_owned())
-        .expect("Failed to get reflective loader address by name");
+    let loader_address =
+        get_exports_by_name(loader_bytes.as_mut_ptr(), LOADER_ENTRY_NAME.to_owned())
+            .expect("Failed to get reflective loader address by name");
 
     // Calculate the reflective loader offset (minus the module_base to get the offset)
     let loader_offset = loader_address as usize - loader_bytes.as_mut_ptr() as usize;
@@ -164,7 +174,8 @@ fn convert_to_shellcode(loader_bytes: &mut Vec<u8>, payload_bytes: &mut Vec<u8>,
     bootstrap.push(0x49);
     bootstrap.push(0x81);
     bootstrap.push(0xc0); // We minus 5 because of the call 0x00 instruction
-    let parameter_offset =  (BOOTSTRAP_TOTAL_LENGTH - 5) + loader_bytes.len() as u32 + payload_bytes.len() as u32;
+    let parameter_offset =
+        (BOOTSTRAP_TOTAL_LENGTH - 5) + loader_bytes.len() as u32 + payload_bytes.len() as u32;
     bootstrap.append(&mut parameter_offset.to_le_bytes().to_vec().clone());
 
     // mov edx, <prameter_hash> - copy the 2nd parameter, which is the hash of the user function into edx
@@ -185,7 +196,8 @@ fn convert_to_shellcode(loader_bytes: &mut Vec<u8>, payload_bytes: &mut Vec<u8>,
     // call <loader_offset> - call the reflective loader address after calculation
     bootstrap.push(0xe8);
     // This must u32 or it breaks assembly
-    let loader_address = (BOOTSTRAP_TOTAL_LENGTH - bootstrap.len() as u32 - 4 as u32) + loader_offset as u32;    
+    let loader_address =
+        (BOOTSTRAP_TOTAL_LENGTH - bootstrap.len() as u32 - 4 as u32) + loader_offset as u32;
     bootstrap.append(&mut loader_address.to_le_bytes().to_vec().clone());
 
     //padding
@@ -214,7 +226,7 @@ fn convert_to_shellcode(loader_bytes: &mut Vec<u8>, payload_bytes: &mut Vec<u8>,
     //
     // End Bootstrap
     //
-    
+
     println!("[!] Bootstrap Shellcode Length: {} (Ensure this matches BOOTSTRAP_TOTAL_LENGTH in the code)", bootstrap.len());
     println!("[+] Reflective Loader Length: {}", loader_bytes.len());
     println!("[+] Payload DLL Length: {}", payload_bytes.len());
@@ -233,11 +245,19 @@ fn convert_to_shellcode(loader_bytes: &mut Vec<u8>, payload_bytes: &mut Vec<u8>,
     // Parameter Value (User-Data)
     shellcode.append(&mut parameter_value.as_bytes().to_vec());
 
-
     println!("[+] Total Shellcode Length: {}", shellcode.len());
     println!("[*] loader(payload_dll: *mut c_void, function_hash: u32, user_data: *mut c_void, user_data_len: u32, _shellcode_bin: *mut c_void, _flags: u32)");
-    println!("[*] arg1: rcx, arg2: rdx, arg3: r8, arg4: r9, arg5: [rsp + 0x20], arg6: [rsp + 0x28]");
-    println!("[*] rcx: {:#x} rdx: {:#x} r8: {}, r9: {:#x}, arg5: shellcode.bin addy, arg6: {}", payload_offset, function_hash, parameter_value, parameter_value.len(), flags_value);
+    println!(
+        "[*] arg1: rcx, arg2: rdx, arg3: r8, arg4: r9, arg5: [rsp + 0x20], arg6: [rsp + 0x28]"
+    );
+    println!(
+        "[*] rcx: {:#x} rdx: {:#x} r8: {}, r9: {:#x}, arg5: shellcode.bin addy, arg6: {}",
+        payload_offset,
+        function_hash,
+        parameter_value,
+        parameter_value.len(),
+        flags_value
+    );
 
     return shellcode;
 }
